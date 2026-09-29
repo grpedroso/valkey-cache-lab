@@ -1,0 +1,45 @@
+@host = http://localhost:5000
+
+### Step 2: baseline, always hits the database (~500 ms)
+GET {{host}}/products/1/no-cache
+
+### Step 2: cache-aside (1st call: database, next calls: cache)
+GET {{host}}/products/1
+
+### Step 2: product that doesn't exist (always hits the database: cache penetration)
+GET {{host}}/products/999
+
+### Step 3: warm the cache without jitter (all keys expire together)
+POST {{host}}/cache/warm
+
+### Step 3: warm the cache with jitter (expirations spread out)
+POST {{host}}/cache/warm?jitter=true
+
+### Database queries and cache hits/misses/errors
+GET {{host}}/stats
+
+### Reset counters
+POST {{host}}/stats/reset
+
+### Cache health (stays 200 with status "degraded" when Valkey is down)
+GET {{host}}/health
+
+### Dashboard: open http://localhost:5000 in a browser (Development only)
+
+### Valkey INFO + DBSIZE (Development only)
+GET {{host}}/valkey/info
+
+### Keys matching a pattern, with TTL (Development only)
+GET {{host}}/valkey/keys?pattern=product:*
+
+### One key: type, TTL and value (Development only)
+GET {{host}}/valkey/key?key=product:1
+
+### Delete a key: manual invalidation (Development only)
+DELETE {{host}}/valkey/key?key=product:1
+
+### Burst: 200 simultaneous lookups over 5 ids (Development only)
+POST {{host}}/lab/burst?requests=200&distinctIds=5
+
+### FLUSHDB (Development only)
+POST {{host}}/valkey/flush

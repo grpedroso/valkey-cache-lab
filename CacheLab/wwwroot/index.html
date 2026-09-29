@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Valkey Cache Lab</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <h1>Valkey Cache Lab</h1>
+      <p class="sub">Cache-aside in .NET, watched from inside Valkey</p>
+    </div>
+    <div class="status">
+      <span id="status-pill" class="pill pill-muted">Connecting…</span>
+      <span id="server-meta" class="meta"></span>
+      <label class="toggle" for="live"><input type="checkbox" id="live" checked> Live</label>
+    </div>
+  </header>
+
+  <main>
+    <section class="tiles" aria-label="Summary">
+      <div class="tile tile-hit"><span class="tile-label">API hit ratio</span><b id="t-hit-ratio">–</b><span id="t-hit-detail" class="tile-sub">hits · misses</span></div>
+      <div class="tile tile-db"><span class="tile-label">Database queries</span><b id="t-db">–</b><span class="tile-sub">500 ms each</span></div>
+      <div class="tile"><span class="tile-label">Keys in Valkey</span><b id="t-keys">–</b><span class="tile-sub">DBSIZE</span></div>
+      <div class="tile"><span class="tile-label">Memory</span><b id="t-memory">–</b><span class="tile-sub">used_memory</span></div>
+      <div class="tile"><span class="tile-label">Ops / sec</span><b id="t-ops">–</b><span class="tile-sub">instantaneous</span></div>
+      <div class="tile tile-fail"><span class="tile-label">Cache errors</span><b id="t-errors">–</b><span class="tile-sub">treated as misses</span></div>
+    </section>
+
+    <div class="grid">
+      <section class="panel">
+        <h2>Request a product</h2>
+        <p class="hint">The first call for an id is a miss and goes to the database (~500 ms). The next ones are hits until the TTL runs out. Ids above 100 don't exist and are never cached.</p>
+        <form id="request-form" class="row">
+          <label for="product-id">Product id</label>
+          <input id="product-id" type="number" min="1" max="9999" value="1">
+          <button type="submit" class="btn btn-primary">Get with cache</button>
+          <button type="button" id="btn-nocache" class="btn">Get without cache</button>
+        </form>
+        <div id="last-result" class="result result-empty">No request yet.</div>
+        <h3>Latency of the last 30 requests <span class="muted">(log scale)</span></h3>
+        <svg id="latency-chart" class="chart" viewBox="0 0 640 200" role="img" aria-label="Latency of the last requests"></svg>
+        <div class="legend">
+          <span><i class="sw sw-hit"></i>cache</span>
+          <span><i class="sw sw-db"></i>database</span>
+          <span><i class="sw sw-muted"></i>not found</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>TTL and expiration</h2>
+        <p class="hint">Load all 100 products at once, as after a deploy. With a fixed TTL they all expire in the same second and every request becomes a miss. Jitter spreads the expirations out.</p>
+        <div class="row">
+          <button type="button" id="warm-fixed" class="btn">Warm 100 keys · fixed TTL</button>
+          <button type="button" id="warm-jitter" class="btn btn-primary">Warm 100 keys · with jitter</button>
+        </div>
+        <h3>Keys in Valkey, last 2 minutes</h3>
+        <svg id="timeline-chart" class="chart" viewBox="0 0 640 180" role="img" aria-label="Number of keys over the last two minutes"></svg>
+        <h3>When the current keys expire</h3>
+        <svg id="ttl-chart" class="chart" viewBox="0 0 640 170" role="img" aria-label="Keys grouped by remaining TTL"></svg>
+        <p id="ttl-note" class="hint"></p>
+      </section>
+
+      <section class="panel">
+        <h2>Burst test</h2>
+        <p class="hint">Fires every request at the same instant, spread over a few product ids. Run it on an empty cache to see a <strong>cache stampede</strong>: concurrent misses for the same key all go to the database.</p>
+        <form id="burst-form" class="row">
+          <label for="burst-requests">Requests</label>
+          <input id="burst-requests" type="number" min="1" max="2000" value="200">
+          <label for="burst-ids">Distinct ids</label>
+          <input id="burst-ids" type="number" min="1" max="100" value="5">
+          <button type="submit" class="btn btn-primary">Run burst</button>
+        </form>
+        <div id="burst-result" class="result result-empty">No burst yet. Tip: flush the database first, run it, then run it again.</div>
+      </section>
+
+      <section class="panel">
+        <h2>Activity</h2>
+        <p class="hint">What this dashboard asked the API to do, newest first.</p>
+        <ol id="activity" class="activity"></ol>
+      </section>
+    </div>
+
+    <section class="panel panel-wide">
+      <div class="panel-head">
+        <h2>Keys in Valkey</h2>
+        <div class="row">
+          <label for="pattern" class="muted">SCAN pattern</label>
+          <input id="pattern" value="*" spellcheck="false">
+          <span id="keys-count" class="muted"></span>
+          <button type="button" id="reset-stats" class="btn">Reset counters</button>
+          <button type="button" id="flush" class="btn btn-danger">Flush database</button>
+        </div>
+      </div>
+      <p class="hint">Listed with <code>SCAN</code> (never <code>KEYS</code>) plus one <code>PTTL</code> per key. Click a key to read it with the command that matches its type. Deleting a key is a manual invalidation: the next request for it is a miss.</p>
+      <div class="keys-layout">
+        <div class="table-wrap">
+          <table id="keys-table">
+            <thead><tr><th>Key</th><th>TTL</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <p id="keys-empty" class="empty">No keys. Request a product or warm the cache.</p>
+        </div>
+        <aside id="inspector" class="inspector">
+          <p class="empty">Select a key to see its type, TTL and value.</p>
+        </aside>
+      </div>
+    </section>
+
+    <section class="panel panel-wide">
+      <h2>Valkey server</h2>
+      <p class="hint">From <code>INFO</code>. Valkey counts <em>every</em> key lookup in <code>keyspace_hits</code>/<code>keyspace_misses</code>, including the <code>PTTL</code> calls this page makes to list keys. That is why the hit ratio at the top is measured by the API instead.</p>
+      <dl id="server-info" class="kv"></dl>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
